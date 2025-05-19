@@ -205,21 +205,19 @@ class WiFiMarauderApp(QMainWindow):
         
         # Load application icon
         icon = QIcon("wifi_marauder.png")
-        self.setWindowIcon(icon)
-        
-        # Initialize database
-        self.db = DatabaseManager()
-        
-        # Initialize integrated feature managers
-        self.anonymity_manager = AnonymityToolsManager() if AnonymityToolsManager else None
+        if icon.isNull():
+            print("Warning: Could not load icon 'wifi_marauder.png'. Make sure it exists in the application directory.")
+        else:
+            self.setWindowIcon(icon)
+
+        # Initialize managers if available
+        self.attack_sequence_manager = AttackSequenceManager(self) if AttackSequenceManager else None
+        self.network_filter_manager = NetworkFilterManager() if NetworkFilterManager else None
         self.decoy_manager = DecoyNetworkManager() if DecoyNetworkManager else None
-        self.sequence_manager = AttackSequenceManager() if AttackSequenceManager else None
-        if self.sequence_manager:
-            self.sequence_manager.app = self  # Pass reference to main app for attack execution
-        self.filter_manager = NetworkFilterManager() if NetworkFilterManager else None
+        self.anonymity_manager = AnonymityToolsManager() if AnonymityToolsManager else None
         self.wps_tester = WPSVulnerabilityTester() if WPSVulnerabilityTester else None
-        
-        # Setup UI
+
+        self.db_manager = DatabaseManager()
         self.setup_ui()
         
         # Load vendor mapping for MAC address lookup
@@ -296,581 +294,485 @@ class WiFiMarauderApp(QMainWindow):
 
     def create_attack_tab(self):
         attack_tab = QWidget()
-        layout = QVBoxLayout(attack_tab)
+        layout = QVBoxLayout()
 
-        # Deauth Attack Group
+        # Existing attack types
         deauth_group = QGroupBox("Deauthentication Attack")
-        deauth_layout = QGridLayout(deauth_group)
-        
-        self.deauth_bssid = QLineEdit()
-        self.deauth_client = QLineEdit()
+        deauth_layout = QGridLayout()
         deauth_layout.addWidget(QLabel("Target BSSID:"), 0, 0)
+        self.deauth_bssid = QLineEdit()
         deauth_layout.addWidget(self.deauth_bssid, 0, 1)
         deauth_layout.addWidget(QLabel("Client MAC (optional):"), 1, 0)
+        self.deauth_client = QLineEdit()
         deauth_layout.addWidget(self.deauth_client, 1, 1)
-        
-        self.start_deauth_btn = QPushButton("Start Deauth")
-        self.start_deauth_btn.clicked.connect(self.start_deauth_attack)
-        self.stop_deauth_btn = QPushButton("Stop Deauth")
-        self.stop_deauth_btn.clicked.connect(self.stop_deauth_attack)
-        self.stop_deauth_btn.setEnabled(False)
-        deauth_layout.addWidget(self.start_deauth_btn, 2, 0)
-        deauth_layout.addWidget(self.stop_deauth_btn, 2, 1)
-        
+        deauth_start = QPushButton("Start Deauth")
+        deauth_start.clicked.connect(self.start_deauth_attack)
+        deauth_layout.addWidget(deauth_start, 2, 0)
+        deauth_stop = QPushButton("Stop Deauth")
+        deauth_stop.clicked.connect(self.stop_deauth_attack)
+        deauth_layout.addWidget(deauth_stop, 2, 1)
         self.deauth_progress = QProgressBar()
         self.deauth_progress.setValue(0)
         deauth_layout.addWidget(self.deauth_progress, 3, 0, 1, 2)
-        
-        self.deauth_stats = QLabel("Packets Sent: 0")
-        deauth_layout.addWidget(self.deauth_stats, 4, 0, 1, 2)
-        
+        deauth_group.setLayout(deauth_layout)
         layout.addWidget(deauth_group)
 
-        # Handshake Capture Group
         handshake_group = QGroupBox("Handshake Capture")
-        handshake_layout = QGridLayout(handshake_group)
-        
-        self.handshake_bssid = QLineEdit()
+        handshake_layout = QGridLayout()
         handshake_layout.addWidget(QLabel("Target BSSID:"), 0, 0)
+        self.handshake_bssid = QLineEdit()
         handshake_layout.addWidget(self.handshake_bssid, 0, 1)
-        
-        self.start_handshake_btn = QPushButton("Start Capture")
-        self.start_handshake_btn.clicked.connect(self.start_handshake_capture)
-        self.stop_handshake_btn = QPushButton("Stop Capture")
-        self.stop_handshake_btn.clicked.connect(self.stop_handshake_capture)
-        self.stop_handshake_btn.setEnabled(False)
-        handshake_layout.addWidget(self.start_handshake_btn, 1, 0)
-        handshake_layout.addWidget(self.stop_handshake_btn, 1, 1)
-        
+        handshake_start = QPushButton("Start Capture")
+        handshake_start.clicked.connect(self.start_handshake_capture)
+        handshake_layout.addWidget(handshake_start, 1, 0)
+        handshake_stop = QPushButton("Stop Capture")
+        handshake_stop.clicked.connect(self.stop_handshake_capture)
+        handshake_layout.addWidget(handshake_stop, 1, 1)
         self.handshake_progress = QProgressBar()
         self.handshake_progress.setValue(0)
         handshake_layout.addWidget(self.handshake_progress, 2, 0, 1, 2)
-        
-        self.handshake_stats = QLabel("Handshakes Captured: 0")
-        handshake_layout.addWidget(self.handshake_stats, 3, 0, 1, 2)
-        
+        handshake_group.setLayout(handshake_layout)
         layout.addWidget(handshake_group)
 
-        # Evil Twin AP Group
-        evil_ap_group = QGroupBox("Evil Twin AP")
-        evil_ap_layout = QGridLayout(evil_ap_group)
-        
-        self.evilap_bssid = QLineEdit()
+        # New Attack Sequence section
+        sequence_group = QGroupBox("Attack Sequences")
+        sequence_layout = QGridLayout()
+        sequence_layout.addWidget(QLabel("Sequence Name:"), 0, 0)
+        self.sequence_name = QLineEdit()
+        sequence_layout.addWidget(self.sequence_name, 0, 1)
+        sequence_layout.addWidget(QLabel("Steps (JSON format):"), 1, 0)
+        self.sequence_steps = QTextEdit()
+        self.sequence_steps.setPlaceholderText("[{'type': 'deauth', 'duration': 10, 'target': 'BSSID'}, {'type': 'handshake_capture', 'timeout': 30}]")
+        sequence_layout.addWidget(self.sequence_steps, 1, 1, 3, 1)
+        define_sequence_btn = QPushButton("Define Sequence")
+        define_sequence_btn.clicked.connect(self.define_attack_sequence)
+        sequence_layout.addWidget(define_sequence_btn, 4, 0)
+        start_sequence_btn = QPushButton("Start Sequence")
+        start_sequence_btn.clicked.connect(self.start_attack_sequence)
+        sequence_layout.addWidget(start_sequence_btn, 4, 1)
+        stop_sequence_btn = QPushButton("Stop Sequence")
+        stop_sequence_btn.clicked.connect(self.stop_attack_sequence)
+        sequence_layout.addWidget(stop_sequence_btn, 5, 0)
+        self.sequence_status = QLabel("Sequence Status: Idle")
+        sequence_layout.addWidget(self.sequence_status, 5, 1)
+        sequence_group.setLayout(sequence_layout)
+        layout.addWidget(sequence_group)
+
+        evilap_group = QGroupBox("Evil Twin AP")
+        evilap_layout = QGridLayout()
+        evilap_layout.addWidget(QLabel("ESSID to Mimic:"), 0, 0)
         self.evilap_essid = QLineEdit()
+        evilap_layout.addWidget(self.evilap_essid, 0, 1)
+        evilap_layout.addWidget(QLabel("Password (if any):"), 1, 0)
         self.evilap_password = QLineEdit()
-        evil_ap_layout.addWidget(QLabel("Target BSSID (optional):"), 0, 0)
-        evil_ap_layout.addWidget(self.evilap_bssid, 0, 1)
-        evil_ap_layout.addWidget(QLabel("ESSID to Mimic:"), 1, 0)
-        evil_ap_layout.addWidget(self.evilap_essid, 1, 1)
-        evil_ap_layout.addWidget(QLabel("Password (optional):"), 2, 0)
-        evil_ap_layout.addWidget(self.evilap_password, 2, 1)
-        
-        self.start_evilap_btn = QPushButton("Start Evil AP")
-        self.start_evilap_btn.clicked.connect(self.start_evil_ap)
-        self.stop_evilap_btn = QPushButton("Stop Evil AP")
-        self.stop_evilap_btn.clicked.connect(self.stop_evil_ap)
-        self.stop_evilap_btn.setEnabled(False)
-        evil_ap_layout.addWidget(self.start_evilap_btn, 3, 0)
-        evil_ap_layout.addWidget(self.stop_evilap_btn, 3, 1)
-        
+        evilap_layout.addWidget(self.evilap_password, 1, 1)
+        evilap_start = QPushButton("Start Evil AP")
+        evilap_start.clicked.connect(self.start_evil_ap)
+        evilap_layout.addWidget(evilap_start, 2, 0)
+        evilap_stop = QPushButton("Stop Evil AP")
+        evilap_stop.clicked.connect(self.stop_evil_ap)
+        evilap_layout.addWidget(evilap_stop, 2, 1)
         self.evilap_progress = QProgressBar()
         self.evilap_progress.setValue(0)
-        evil_ap_layout.addWidget(self.evilap_progress, 4, 0, 1, 2)
-        
-        self.evilap_stats = QLabel("Connections: 0")
-        evil_ap_layout.addWidget(self.evilap_stats, 5, 0, 1, 2)
-        
-        layout.addWidget(evil_ap_group)
+        evilap_layout.addWidget(self.evilap_progress, 3, 0, 1, 2)
+        evilap_group.setLayout(evilap_layout)
+        layout.addWidget(evilap_group)
 
-        # FakeAuth Attack Group
         fakeauth_group = QGroupBox("FakeAuth Attack")
-        fakeauth_layout = QGridLayout(fakeauth_group)
-        
-        self.fakeauth_bssid = QLineEdit()
+        fakeauth_layout = QGridLayout()
         fakeauth_layout.addWidget(QLabel("Target BSSID:"), 0, 0)
+        self.fakeauth_bssid = QLineEdit()
         fakeauth_layout.addWidget(self.fakeauth_bssid, 0, 1)
-        
-        self.start_fakeauth_btn = QPushButton("Start FakeAuth")
-        self.start_fakeauth_btn.clicked.connect(self.start_fakeauth_attack)
-        self.stop_fakeauth_btn = QPushButton("Stop FakeAuth")
-        self.stop_fakeauth_btn.clicked.connect(self.stop_fakeauth_attack)
-        self.stop_fakeauth_btn.setEnabled(False)
-        fakeauth_layout.addWidget(self.start_fakeauth_btn, 1, 0)
-        fakeauth_layout.addWidget(self.stop_fakeauth_btn, 1, 1)
-        
+        fakeauth_start = QPushButton("Start FakeAuth")
+        fakeauth_start.clicked.connect(self.start_fakeauth_attack)
+        fakeauth_layout.addWidget(fakeauth_start, 1, 0)
+        fakeauth_stop = QPushButton("Stop FakeAuth")
+        fakeauth_stop.clicked.connect(self.stop_fakeauth_attack)
+        fakeauth_layout.addWidget(fakeauth_stop, 1, 1)
         self.fakeauth_progress = QProgressBar()
         self.fakeauth_progress.setValue(0)
         fakeauth_layout.addWidget(self.fakeauth_progress, 2, 0, 1, 2)
-        
-        self.fakeauth_stats = QLabel("Auth Attempts: 0")
-        fakeauth_layout.addWidget(self.fakeauth_stats, 3, 0, 1, 2)
-        
+        fakeauth_group.setLayout(fakeauth_layout)
         layout.addWidget(fakeauth_group)
 
-        # WPA Cracking Group
-        cracking_group = QGroupBox("WPA Cracking")
-        cracking_layout = QGridLayout(cracking_group)
-        
-        self.cap_file = QLineEdit()
-        self.wordlist_file = QLineEdit()
-        cracking_layout.addWidget(QLabel("Handshake File:"), 0, 0)
-        cracking_layout.addWidget(self.cap_file, 0, 1)
-        cracking_layout.addWidget(QLabel("Wordlist File:"), 1, 0)
-        cracking_layout.addWidget(self.wordlist_file, 1, 1)
-        
-        self.start_cracking_btn = QPushButton("Start Cracking")
-        self.start_cracking_btn.clicked.connect(self.start_cracking)
-        self.stop_cracking_btn = QPushButton("Stop Cracking")
-        self.stop_cracking_btn.clicked.connect(self.stop_cracking)
-        self.stop_cracking_btn.setEnabled(False)
-        cracking_layout.addWidget(self.start_cracking_btn, 2, 0)
-        cracking_layout.addWidget(self.stop_cracking_btn, 2, 1)
-        
-        self.cracking_progress = QProgressBar()
-        self.cracking_progress.setValue(0)
-        cracking_layout.addWidget(self.cracking_progress, 3, 0, 1, 2)
-        
-        self.cracking_stats = QLabel("Attempts: 0")
-        cracking_layout.addWidget(self.cracking_stats, 4, 0, 1, 2)
-        
-        layout.addWidget(cracking_group)
-
-        # Packet Crafting Group
-        packet_craft_group = QGroupBox("Packet Crafting and Injection")
-        packet_craft_layout = QGridLayout(packet_craft_group)
-        
-        self.packet_type = QLineEdit()
-        self.packet_target = QLineEdit()
-        packet_craft_layout.addWidget(QLabel("Packet Type:"), 0, 0)
-        packet_craft_layout.addWidget(self.packet_type, 0, 1)
-        packet_craft_layout.addWidget(QLabel("Target (BSSID/IP):"), 1, 0)
-        packet_craft_layout.addWidget(self.packet_target, 1, 1)
-        
-        self.start_packet_craft_btn = QPushButton("Start Crafting")
-        self.start_packet_craft_btn.clicked.connect(self.start_packet_crafting)
-        self.stop_packet_craft_btn = QPushButton("Stop Crafting")
-        self.stop_packet_craft_btn.clicked.connect(self.stop_packet_crafting)
-        self.stop_packet_craft_btn.setEnabled(False)
-        packet_craft_layout.addWidget(self.start_packet_craft_btn, 2, 0)
-        packet_craft_layout.addWidget(self.stop_packet_craft_btn, 2, 1)
-        
-        self.packet_craft_progress = QProgressBar()
-        self.packet_craft_progress.setValue(0)
-        packet_craft_layout.addWidget(self.packet_craft_progress, 3, 0, 1, 2)
-        
-        self.packet_craft_stats = QLabel("Packets Crafted: 0")
-        packet_craft_layout.addWidget(self.packet_craft_stats, 4, 0, 1, 2)
-        
-        layout.addWidget(packet_craft_group)
+        # Enhanced MDK4 Wireless Disruption Tools section
+        mdk4_group = QGroupBox("Wireless Disruption Tools (MDK4)")
+        mdk4_layout = QGridLayout()
+        mdk4_layout.addWidget(QLabel("Target BSSID:"), 0, 0)
+        self.mdk4_bssid = QLineEdit()
+        mdk4_layout.addWidget(self.mdk4_bssid, 0, 1)
+        mdk4_layout.addWidget(QLabel("Attack Mode:"), 1, 0)
+        self.mdk4_mode = QComboBox()
+        self.mdk4_mode.addItems(["Bandwidth Throttling", "Beacon Flooding", "Authentication DoS", "Deauthentication Flood"])
+        mdk4_layout.addWidget(self.mdk4_mode, 1, 1)
+        mdk4_layout.addWidget(QLabel("Intensity (1-10):"), 2, 0)
+        self.mdk4_intensity = QSpinBox()
+        self.mdk4_intensity.setRange(1, 10)
+        self.mdk4_intensity.setValue(5)
+        mdk4_layout.addWidget(self.mdk4_intensity, 2, 1)
+        mdk4_start = QPushButton("Start Attack")
+        mdk4_start.clicked.connect(self.start_mdk4_attack)
+        mdk4_layout.addWidget(mdk4_start, 3, 0)
+        mdk4_stop = QPushButton("Stop Attack")
+        mdk4_stop.clicked.connect(self.stop_mdk4_attack)
+        mdk4_layout.addWidget(mdk4_stop, 3, 1)
+        self.mdk4_progress = QProgressBar()
+        self.mdk4_progress.setValue(0)
+        mdk4_layout.addWidget(self.mdk4_progress, 4, 0, 1, 2)
+        self.mdk4_status = QLabel("MDK4 Attack Status: Idle")
+        mdk4_layout.addWidget(self.mdk4_status, 5, 0, 1, 2)
+        mdk4_group.setLayout(mdk4_layout)
+        layout.addWidget(mdk4_group)
 
         layout.addStretch()
+        attack_tab.setLayout(layout)
         return attack_tab
 
+    def define_attack_sequence(self):
+        try:
+            name = self.sequence_name.text().strip()
+            steps_text = self.sequence_steps.toPlainText().strip()
+            if not name or not steps_text:
+                QMessageBox.warning(self, "Input Error", "Please provide both a sequence name and steps.")
+                return
+            steps = json.loads(steps_text)
+            if not isinstance(steps, list):
+                QMessageBox.warning(self, "Format Error", "Steps must be a list of attack configurations.")
+                return
+            if hasattr(self, 'attack_sequence_manager') and self.attack_sequence_manager:
+                self.attack_sequence_manager.define_sequence(name, steps)
+                self.log(f"Defined attack sequence: {name}")
+                QMessageBox.information(self, "Success", f"Sequence '{name}' defined successfully.")
+            else:
+                QMessageBox.warning(self, "Feature Unavailable", "Attack Sequence Manager is not available.")
+        except json.JSONDecodeError as e:
+            QMessageBox.warning(self, "JSON Error", f"Invalid JSON format in steps: {str(e)}")
+        except Exception as e:
+            self.log(f"Error defining attack sequence: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Failed to define sequence: {str(e)}")
+
+    def start_attack_sequence(self):
+        try:
+            name = self.sequence_name.text().strip()
+            if not name:
+                QMessageBox.warning(self, "Input Error", "Please provide a sequence name.")
+                return
+            if hasattr(self, 'attack_sequence_manager') and self.attack_sequence_manager:
+                if self.attack_sequence_manager.start_sequence(name):
+                    self.log(f"Started attack sequence: {name}")
+                    self.sequence_status.setText(f"Sequence Status: Running {name}")
+                    # Start a timer to execute steps
+                    self.sequence_timer = QTimer(self)
+                    self.sequence_timer.timeout.connect(self.execute_sequence_step)
+                    self.sequence_timer.start(5000)  # Check every 5 seconds
+                else:
+                    QMessageBox.warning(self, "Start Failed", f"Sequence '{name}' not found or already active.")
+            else:
+                QMessageBox.warning(self, "Feature Unavailable", "Attack Sequence Manager is not available.")
+        except Exception as e:
+            self.log(f"Error starting attack sequence: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Failed to start sequence: {str(e)}")
+
+    def execute_sequence_step(self):
+        try:
+            if hasattr(self, 'attack_sequence_manager') and self.attack_sequence_manager:
+                status = self.attack_sequence_manager.get_sequence_status()
+                if status['status'] == 'running':
+                    result = self.attack_sequence_manager.execute_current_step()
+                    self.log(f"Sequence step result: {result}")
+                    if result['status'] == 'complete':
+                        self.sequence_status.setText("Sequence Status: Completed")
+                        if hasattr(self, 'sequence_timer'):
+                            self.sequence_timer.stop()
+                    elif result['status'] == 'error':
+                        self.sequence_status.setText(f"Sequence Status: Error - {result['message']}")
+                        if hasattr(self, 'sequence_timer'):
+                            self.sequence_timer.stop()
+                else:
+                    self.sequence_status.setText("Sequence Status: Idle")
+                    if hasattr(self, 'sequence_timer'):
+                        self.sequence_timer.stop()
+        except Exception as e:
+            self.log(f"Error executing sequence step: {str(e)}")
+            self.sequence_status.setText(f"Sequence Status: Error - {str(e)}")
+            if hasattr(self, 'sequence_timer'):
+                self.sequence_timer.stop()
+
+    def stop_attack_sequence(self):
+        try:
+            if hasattr(self, 'attack_sequence_manager') and self.attack_sequence_manager:
+                if self.attack_sequence_manager.stop_sequence():
+                    self.log("Stopped attack sequence.")
+                    self.sequence_status.setText("Sequence Status: Stopped")
+                    if hasattr(self, 'sequence_timer'):
+                        self.sequence_timer.stop()
+                else:
+                    QMessageBox.warning(self, "Stop Failed", "No active sequence to stop.")
+            else:
+                QMessageBox.warning(self, "Feature Unavailable", "Attack Sequence Manager is not available.")
+        except Exception as e:
+            self.log(f"Error stopping attack sequence: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Failed to stop sequence: {str(e)}")
+
     def create_scan_tab(self):
-        self.network_scan_tab = QWidget()
-        layout = QVBoxLayout(self.network_scan_tab)
+        scan_tab = QWidget()
+        layout = QVBoxLayout()
 
-        # Existing UI elements for network scanning
-        scan_button = QPushButton("Start Network Scan")
-        scan_button.clicked.connect(self.start_network_scan)
-        layout.addWidget(scan_button)
-        
-        self.network_list = QListWidget()
-        layout.addWidget(self.network_list)
-        
-        refresh_button = QPushButton("Refresh Network List")
-        refresh_button.clicked.connect(self.refresh_network_list)
-        layout.addWidget(refresh_button)
+        scan_group = QGroupBox("WiFi Scan")
+        scan_layout = QGridLayout()
+        scan_layout.addWidget(QLabel("Interface:"), 0, 0)
+        self.scan_interface = QComboBox()
+        self.scan_interface.addItems(["wlan0", "wlan1"])
+        scan_layout.addWidget(self.scan_interface, 0, 1)
+        scan_layout.addWidget(QLabel("Duration (seconds):"), 1, 0)
+        self.scan_duration = QSpinBox()
+        self.scan_duration.setRange(10, 300)
+        self.scan_duration.setValue(30)
+        scan_layout.addWidget(self.scan_duration, 1, 1)
+        scan_button = QPushButton("Start Scan")
+        scan_button.clicked.connect(self.start_scan)
+        scan_layout.addWidget(scan_button, 2, 0)
+        self.scan_progress = QProgressBar()
+        self.scan_progress.setValue(0)
+        scan_layout.addWidget(self.scan_progress, 2, 1)
+        scan_group.setLayout(scan_layout)
+        layout.addWidget(scan_group)
 
-        # New UI elements for Network Sniffing and Mapping
-        sniff_button = QPushButton("Start Network Sniffing")
-        sniff_button.clicked.connect(self.start_network_sniffing)
-        layout.addWidget(sniff_button)
-        
-        self.sniff_status = QLabel("Sniffing Status: Not Running")
-        layout.addWidget(self.sniff_status)
-        
-        self.network_map = QListWidget()
-        self.network_map.setWindowTitle("Network Map")
-        layout.addWidget(self.network_map)
-        
-        update_map_button = QPushButton("Update Network Map")
-        update_map_button.clicked.connect(self.update_network_map)
-        layout.addWidget(update_map_button)
+        # New Network Filter section
+        filter_group = QGroupBox("Network Filters")
+        filter_layout = QGridLayout()
+        filter_layout.addWidget(QLabel("Filter Profile Name:"), 0, 0)
+        self.filter_name = QLineEdit()
+        filter_layout.addWidget(self.filter_name, 0, 1)
+        filter_layout.addWidget(QLabel("Criteria (JSON format):"), 1, 0)
+        self.filter_criteria = QTextEdit()
+        self.filter_criteria.setPlaceholderText("{'signal_strength_min': -70, 'encryption_types': ['WPA2'], 'channels': [1, 6, 11]}")
+        filter_layout.addWidget(self.filter_criteria, 1, 1, 3, 1)
+        define_filter_btn = QPushButton("Define Filter Profile")
+        define_filter_btn.clicked.connect(self.define_filter_profile)
+        filter_layout.addWidget(define_filter_btn, 4, 0)
+        apply_filter_btn = QPushButton("Apply Filter Profile")
+        apply_filter_btn.clicked.connect(self.apply_filter_profile)
+        filter_layout.addWidget(apply_filter_btn, 4, 1)
+        self.filter_status = QLabel("Filter Status: No filter active")
+        filter_layout.addWidget(self.filter_status, 5, 0, 1, 2)
+        filter_group.setLayout(filter_layout)
+        layout.addWidget(filter_group)
+
+        result_group = QGroupBox("Scan Results")
+        result_layout = QVBoxLayout()
+        self.result_table = QTableWidget()
+        self.result_table.setRowCount(0)
+        self.result_table.setColumnCount(6)
+        self.result_table.setHorizontalHeaderLabels(["BSSID", "ESSID", "Signal", "Channel", "Encryption", "Select"])
+        self.result_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        result_layout.addWidget(self.result_table)
+        select_all_btn = QPushButton("Select All")
+        select_all_btn.clicked.connect(self.select_all_networks)
+        result_layout.addWidget(select_all_btn)
+        set_target_btn = QPushButton("Set as Target")
+        set_target_btn.clicked.connect(self.set_as_target)
+        result_layout.addWidget(set_target_btn)
+        result_group.setLayout(result_layout)
+        layout.addWidget(result_group)
 
         layout.addStretch()
-        return self.network_scan_tab
+        scan_tab.setLayout(layout)
+        return scan_tab
 
-    def create_logs_tab(self):
-        logs_tab = QWidget()
-        layout = QVBoxLayout(logs_tab)
-        
-        # Existing log output area
-        self.output_area = QTextEdit()
-        self.output_area.setReadOnly(True)
-        layout.addWidget(self.output_area)
-        
-        clear_button = QPushButton("Clear Logs")
-        clear_button.clicked.connect(self.clear_output)
-        layout.addWidget(clear_button)
-        
-        # UI elements for Packet Analysis (if not already added)
-        packet_button = QPushButton("Start Packet Capture")
-        packet_button.clicked.connect(self.start_packet_capture)
-        layout.addWidget(packet_button)
-        
-        self.packet_status = QLabel("Packet Capture: Not Running")
-        layout.addWidget(self.packet_status)
-        
-        self.packet_list = QListWidget()
-        layout.addWidget(self.packet_list)
-        
-        load_pcap_button = QPushButton("Load PCAP File")
-        load_pcap_button.clicked.connect(self.load_pcap_file)
-        layout.addWidget(load_pcap_button)
-        
-        # New UI elements for Protocol Analysis
-        protocol_button = QPushButton("Start Protocol Analysis")
-        protocol_button.clicked.connect(self.start_protocol_analysis)
-        layout.addWidget(protocol_button)
-        
-        self.protocol_status = QLabel("Protocol Analysis: Not Running")
-        layout.addWidget(self.protocol_status)
-        
-        self.protocol_alerts = QListWidget()
-        self.protocol_alerts.setWindowTitle("Protocol Alerts")
-        layout.addWidget(self.protocol_alerts)
-        
-        update_alerts_button = QPushButton("Update Protocol Alerts")
-        update_alerts_button.clicked.connect(self.update_protocol_alerts)
-        layout.addWidget(update_alerts_button)
-        
+    def define_filter_profile(self):
+        try:
+            name = self.filter_name.text().strip()
+            criteria_text = self.filter_criteria.toPlainText().strip()
+            if not name or not criteria_text:
+                QMessageBox.warning(self, "Input Error", "Please provide both a filter profile name and criteria.")
+                return
+            criteria = json.loads(criteria_text)
+            if not isinstance(criteria, dict):
+                QMessageBox.warning(self, "Format Error", "Criteria must be a dictionary of filter settings.")
+                return
+            if hasattr(self, 'network_filter_manager') and self.network_filter_manager:
+                self.network_filter_manager.define_filter_profile(name, criteria, f"User-defined filter on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                self.log(f"Defined network filter profile: {name}")
+                QMessageBox.information(self, "Success", f"Filter profile '{name}' defined successfully.")
+            else:
+                QMessageBox.warning(self, "Feature Unavailable", "Network Filter Manager is not available.")
+        except json.JSONDecodeError as e:
+            QMessageBox.warning(self, "JSON Error", f"Invalid JSON format in criteria: {str(e)}")
+        except Exception as e:
+            self.log(f"Error defining filter profile: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Failed to define filter profile: {str(e)}")
+
+    def apply_filter_profile(self):
+        try:
+            name = self.filter_name.text().strip()
+            if not name:
+                QMessageBox.warning(self, "Input Error", "Please provide a filter profile name.")
+                return
+            if hasattr(self, 'network_filter_manager') and self.network_filter_manager:
+                if self.network_filter_manager.apply_filter_profile(name):
+                    self.log(f"Applied network filter profile: {name}")
+                    self.filter_status.setText(f"Filter Status: Active - {name}")
+                    QMessageBox.information(self, "Success", f"Filter profile '{name}' applied successfully.")
+                else:
+                    QMessageBox.warning(self, "Apply Failed", f"Filter profile '{name}' not found.")
+            else:
+                QMessageBox.warning(self, "Feature Unavailable", "Network Filter Manager is not available.")
+        except Exception as e:
+            self.log(f"Error applying filter profile: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Failed to apply filter profile: {str(e)}")
+
+    def create_decoys_tab(self):
+        decoy_tab = QWidget()
+        layout = QVBoxLayout()
+
+        wifi_group = QGroupBox("WiFi Decoy Networks")
+        wifi_layout = QGridLayout()
+        wifi_layout.addWidget(QLabel("WiFi AP Name:"), 0, 0)
+        self.wifi_ap_name = QLineEdit()
+        self.wifi_ap_name.setPlaceholderText("Default: WiFi_Marauder")
+        wifi_layout.addWidget(self.wifi_ap_name, 0, 1)
+        wifi_start = QPushButton("Start WiFi Decoy")
+        wifi_start.clicked.connect(self.start_wifi_decoy)
+        wifi_layout.addWidget(wifi_start, 1, 0)
+        wifi_stop = QPushButton("Stop WiFi Decoy")
+        wifi_stop.clicked.connect(self.stop_wifi_decoy)
+        wifi_layout.addWidget(wifi_stop, 1, 1)
+        self.wifi_decoy_status = QLabel("WiFi Decoy Status: Inactive")
+        wifi_layout.addWidget(self.wifi_decoy_status, 2, 0, 1, 2)
+        wifi_group.setLayout(wifi_layout)
+        layout.addWidget(wifi_group)
+
+        bt_group = QGroupBox("Bluetooth Decoy Devices")
+        bt_layout = QGridLayout()
+        bt_layout.addWidget(QLabel("Bluetooth Device Name:"), 0, 0)
+        self.bt_device_name = QLineEdit()
+        self.bt_device_name.setPlaceholderText("Default: BT_Marauder")
+        bt_layout.addWidget(self.bt_device_name, 0, 1)
+        bt_start = QPushButton("Start Bluetooth Decoy")
+        bt_start.clicked.connect(self.start_bt_decoy)
+        bt_layout.addWidget(bt_start, 1, 0)
+        bt_stop = QPushButton("Stop Bluetooth Decoy")
+        bt_stop.clicked.connect(self.stop_bt_decoy)
+        bt_layout.addWidget(bt_stop, 1, 1)
+        self.bt_decoy_status = QLabel("Bluetooth Decoy Status: Inactive")
+        bt_layout.addWidget(self.bt_decoy_status, 2, 0, 1, 2)
+        bt_group.setLayout(bt_layout)
+        layout.addWidget(bt_group)
+
         layout.addStretch()
-        return logs_tab
+        decoy_tab.setLayout(layout)
+        return decoy_tab
 
-    def start_deauth_attack(self):
-        bssid = self.deauth_bssid.text().strip()
-        client = self.deauth_client.text().strip()
-        if not bssid:
-            QMessageBox.warning(self, "Invalid Input", "Please enter a target BSSID.")
-            return
-        self.deauth_active = True
-        self.deauth_packets_sent = 0
-        self.deauth_progress.setValue(0)
-        self.deauth_stats.setText("Packets Sent: 0")
-        self.append_output(f"Starting Deauth attack on {bssid} {'for client ' + client if client else ''}")
-        # Placeholder for actual attack start logic
-        # Start a timer to simulate progress updates
-        self.deauth_timer = QTimer()
-        self.deauth_timer.timeout.connect(self.update_deauth_progress)
-        self.deauth_timer.start(1000)  # Update every second
-        self.update_dashboard()
+    def start_wifi_decoy(self):
+        try:
+            ap_name = self.wifi_ap_name.text().strip() or "WiFi_Marauder"
+            if hasattr(self, 'decoy_manager') and self.decoy_manager:
+                if self.decoy_manager.start_wifi_decoy(ap_name):
+                    self.log(f"Started WiFi decoy network with name: {ap_name}")
+                    self.wifi_decoy_status.setText(f"WiFi Decoy Status: Active - {ap_name}")
+                else:
+                    QMessageBox.warning(self, "Start Failed", "Failed to start WiFi decoy network.")
+            else:
+                QMessageBox.warning(self, "Feature Unavailable", "Decoy Network Manager is not available.")
+        except Exception as e:
+            self.log(f"Error starting WiFi decoy: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Failed to start WiFi decoy: {str(e)}")
 
-    def update_deauth_progress(self):
-        if not hasattr(self, 'deauth_active') or not self.deauth_active:
-            self.deauth_timer.stop()
+    def stop_wifi_decoy(self):
+        try:
+            if hasattr(self, 'decoy_manager') and self.decoy_manager:
+                if self.decoy_manager.stop_wifi_decoy():
+                    self.log("Stopped WiFi decoy network.")
+                    self.wifi_decoy_status.setText("WiFi Decoy Status: Inactive")
+                else:
+                    QMessageBox.warning(self, "Stop Failed", "No active WiFi decoy network to stop.")
+            else:
+                QMessageBox.warning(self, "Feature Unavailable", "Decoy Network Manager is not available.")
+        except Exception as e:
+            self.log(f"Error stopping WiFi decoy: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Failed to stop WiFi decoy: {str(e)}")
+
+    def start_bt_decoy(self):
+        try:
+            device_name = self.bt_device_name.text().strip() or "BT_Marauder"
+            if hasattr(self, 'decoy_manager') and self.decoy_manager:
+                if self.decoy_manager.start_bluetooth_decoy(device_name):
+                    self.log(f"Started Bluetooth decoy device with name: {device_name}")
+                    self.bt_decoy_status.setText(f"Bluetooth Decoy Status: Active - {device_name}")
+                else:
+                    QMessageBox.warning(self, "Start Failed", "Failed to start Bluetooth decoy device.")
+            else:
+                QMessageBox.warning(self, "Feature Unavailable", "Decoy Network Manager is not available.")
+        except Exception as e:
+            self.log(f"Error starting Bluetooth decoy: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Failed to start Bluetooth decoy: {str(e)}")
+
+    def stop_bt_decoy(self):
+        try:
+            if hasattr(self, 'decoy_manager') and self.decoy_manager:
+                if self.decoy_manager.stop_bluetooth_decoy():
+                    self.log("Stopped Bluetooth decoy device.")
+                    self.bt_decoy_status.setText("Bluetooth Decoy Status: Inactive")
+                else:
+                    QMessageBox.warning(self, "Stop Failed", "No active Bluetooth decoy device to stop.")
+            else:
+                QMessageBox.warning(self, "Feature Unavailable", "Decoy Network Manager is not available.")
+        except Exception as e:
+            self.log(f"Error stopping Bluetooth decoy: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Failed to stop Bluetooth decoy: {str(e)}")
+
+    def start_mdk4_attack(self):
+        try:
+            bssid = self.mdk4_bssid.text().strip()
+            mode = self.mdk4_mode.currentText()
+            intensity = self.mdk4_intensity.value()
+            if not bssid:
+                QMessageBox.warning(self, "Input Error", "Please provide a target BSSID.")
+                return
+            # Placeholder for actual MDK4 attack logic based on mode
+            self.log(f"Starting {mode} on {bssid} with intensity {intensity}")
+            self.mdk4_active = True
+            self.mdk4_progress.setValue(0)
+            self.mdk4_status.setText(f"MDK4 Attack Status: Running {mode}")
+            # Start a timer to simulate progress updates
+            self.mdk4_timer = QTimer(self)
+            self.mdk4_timer.timeout.connect(self.update_mdk4_progress)
+            self.mdk4_timer.start(1000)  # Update every second
+            # In a real implementation, we would map the mode to specific MDK4 commands:
+            # - Bandwidth Throttling: mdk4 wlan0 d -B <bssid> -s <speed>
+            # - Beacon Flooding: mdk4 wlan0 b -n <essid> -c <channel>
+            # - Authentication DoS: mdk4 wlan0 a -a <bssid>
+            # - Deauthentication Flood: mdk4 wlan0 d -B <bssid>
+        except Exception as e:
+            self.log(f"Error starting MDK4 attack: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Failed to start attack: {str(e)}")
+
+    def update_mdk4_progress(self):
+        if not hasattr(self, 'mdk4_active') or not self.mdk4_active:
+            if hasattr(self, 'mdk4_timer'):
+                self.mdk4_timer.stop()
             return
-        self.deauth_packets_sent += 10  # Simulate sending 10 packets per second
-        self.deauth_stats.setText(f"Packets Sent: {self.deauth_packets_sent}")
-        progress = min(100, self.deauth_packets_sent // 5)  # Reach 100% at 500 packets
-        self.deauth_progress.setValue(progress)
+        progress = min(100, self.mdk4_progress.value() + 10)
+        self.mdk4_progress.setValue(progress)
         if progress == 100:
-            self.deauth_timer.stop()
-            self.deauth_active = False
-            self.append_output("Deauth attack completed")
-            self.update_dashboard()
+            if hasattr(self, 'mdk4_timer'):
+                self.mdk4_timer.stop()
+            self.mdk4_active = False
+            self.log("MDK4 attack simulation completed")
+            self.mdk4_status.setText("MDK4 Attack Status: Completed")
 
-    def stop_deauth_attack(self):
-        if hasattr(self, 'deauth_active') and self.deauth_active:
-            self.deauth_active = False
-            if hasattr(self, 'deauth_timer'):
-                self.deauth_timer.stop()
-            self.deauth_progress.setValue(0)
-            self.append_output("Deauth attack stopped")
-            self.update_dashboard()
-        else:
-            QMessageBox.warning(self, "No Active Attack", "No Deauth attack is currently running.")
-
-    def start_handshake_capture(self):
-        bssid = self.handshake_bssid.text().strip()
-        if not bssid:
-            QMessageBox.warning(self, "Invalid Input", "Please enter a target BSSID.")
-            return
-        self.handshake_active = True
-        self.handshake_captured = 0
-        self.handshake_progress.setValue(0)
-        self.handshake_stats.setText("Handshakes Captured: 0")
-        self.append_output(f"Starting Handshake Capture for {bssid}")
-        # Placeholder for actual capture logic
-        # Start a timer to simulate progress updates
-        self.handshake_timer = QTimer()
-        self.handshake_timer.timeout.connect(self.update_handshake_progress)
-        self.handshake_timer.start(2000)  # Update every 2 seconds
-        self.update_dashboard()
-
-    def update_handshake_progress(self):
-        if not hasattr(self, 'handshake_active') or not self.handshake_active:
-            self.handshake_timer.stop()
-            return
-        self.handshake_captured += 1  # Simulate capturing a handshake
-        self.handshake_stats.setText(f"Handshakes Captured: {self.handshake_captured}")
-        progress = min(100, self.handshake_captured * 20)  # Reach 100% at 5 handshakes
-        self.handshake_progress.setValue(progress)
-        if progress == 100:
-            self.handshake_timer.stop()
-            self.handshake_active = False
-            self.append_output("Handshake capture completed")
-            self.update_dashboard()
-
-    def stop_handshake_capture(self):
-        if hasattr(self, 'handshake_active') and self.handshake_active:
-            self.handshake_active = False
-            if hasattr(self, 'handshake_timer'):
-                self.handshake_timer.stop()
-            self.handshake_progress.setValue(0)
-            self.append_output("Handshake capture stopped")
-            self.update_dashboard()
-        else:
-            QMessageBox.warning(self, "No Active Capture", "No Handshake Capture is currently running.")
-
-    def start_evil_ap(self):
-        essid = self.evilap_essid.text().strip()
-        password = self.evilap_password.text().strip()
-        bssid = self.evilap_bssid.text().strip()
-        if not essid or len(password) < 8:
-            QMessageBox.warning(self, "Invalid Input", "Please provide an ESSID and a password with at least 8 characters.")
-            return
-        self.evil_ap_active = True
-        self.evil_ap_connections = 0
-        self.evil_ap_progress.setValue(0)
-        self.evil_ap_stats.setText("Connections: 0")
-        self.append_output(f"Starting Evil Twin AP with ESSID {essid}")
-        # Placeholder for actual Evil AP logic
-        # Start a timer to simulate progress updates
-        self.evil_ap_timer = QTimer()
-        self.evil_ap_timer.timeout.connect(self.update_evil_ap_progress)
-        self.evil_ap_timer.start(3000)  # Update every 3 seconds
-        self.update_dashboard()
-
-    def update_evil_ap_progress(self):
-        if not hasattr(self, 'evil_ap_active') or not self.evil_ap_active:
-            self.evil_ap_timer.stop()
-            return
-        self.evil_ap_connections += 1  # Simulate a new connection
-        self.evil_ap_stats.setText(f"Connections: {self.evil_ap_connections}")
-        progress = min(100, self.evil_ap_connections * 10)  # Reach 100% at 10 connections
-        self.evil_ap_progress.setValue(progress)
-        if progress == 100:
-            self.evil_ap_timer.stop()
-            self.evil_ap_active = False
-            self.append_output("Evil Twin AP simulation completed")
-            self.update_dashboard()
-
-    def stop_evil_ap(self):
-        if hasattr(self, 'evil_ap_active') and self.evil_ap_active:
-            self.evil_ap_active = False
-            if hasattr(self, 'evil_ap_timer'):
-                self.evil_ap_timer.stop()
-            self.evil_ap_progress.setValue(0)
-            self.append_output("Evil Twin AP stopped")
-            self.update_dashboard()
-        else:
-            QMessageBox.warning(self, "No Active AP", "No Evil Twin AP is currently running.")
-
-    def start_fakeauth_attack(self):
-        bssid = self.fakeauth_bssid.text().strip()
-        if not bssid:
-            QMessageBox.warning(self, "Invalid Input", "Please enter a target BSSID.")
-            return
-        self.fakeauth_active = True
-        self.fakeauth_attempts = 0
-        self.fakeauth_progress.setValue(0)
-        self.fakeauth_stats.setText("Auth Attempts: 0")
-        self.append_output(f"Starting FakeAuth attack on {bssid}")
-        # Placeholder for actual FakeAuth logic
-        # Start a timer to simulate progress updates
-        self.fakeauth_timer = QTimer()
-        self.fakeauth_timer.timeout.connect(self.update_fakeauth_progress)
-        self.fakeauth_timer.start(1500)  # Update every 1.5 seconds
-        self.update_dashboard()
-
-    def update_fakeauth_progress(self):
-        if not hasattr(self, 'fakeauth_active') or not self.fakeauth_active:
-            self.fakeauth_timer.stop()
-            return
-        self.fakeauth_attempts += 2  # Simulate auth attempts
-        self.fakeauth_stats.setText(f"Auth Attempts: {self.fakeauth_attempts}")
-        progress = min(100, self.fakeauth_attempts * 5)  # Reach 100% at 20 attempts
-        self.fakeauth_progress.setValue(progress)
-        if progress == 100:
-            self.fakeauth_timer.stop()
-            self.fakeauth_active = False
-            self.append_output("FakeAuth attack completed")
-            self.update_dashboard()
-
-    def stop_fakeauth_attack(self):
-        if hasattr(self, 'fakeauth_active') and self.fakeauth_active:
-            self.fakeauth_active = False
-            if hasattr(self, 'fakeauth_timer'):
-                self.fakeauth_timer.stop()
-            self.fakeauth_progress.setValue(0)
-            self.append_output("FakeAuth attack stopped")
-            self.update_dashboard()
-        else:
-            QMessageBox.warning(self, "No Active Attack", "No FakeAuth attack is currently running.")
-
-    def start_cracking(self):
-        cap_file = self.cap_file.text().strip()
-        wordlist_file = self.wordlist_file.text().strip()
-        if not cap_file or not wordlist_file:
-            QMessageBox.warning(self, "Invalid Input", "Please select both a handshake file and a wordlist file.")
-            return
-        self.cracking_active = True
-        self.cracking_attempts = 0
-        self.cracking_progress.setValue(0)
-        self.cracking_stats.setText("Attempts: 0")
-        self.append_output(f"Starting WPA cracking with handshake file {cap_file}")
-        # Placeholder for actual cracking logic
-        # Start a timer to simulate progress updates
-        self.cracking_timer = QTimer()
-        self.cracking_timer.timeout.connect(self.update_cracking_progress)
-        self.cracking_timer.start(1000)  # Update every second
-        self.update_dashboard()
-
-    def update_cracking_progress(self):
-        if not hasattr(self, 'cracking_active') or not self.cracking_active:
-            self.cracking_timer.stop()
-            return
-        self.cracking_attempts += 100  # Simulate password attempts
-        self.cracking_stats.setText(f"Attempts: {self.cracking_attempts}")
-        progress = min(100, self.cracking_attempts // 100)  # Reach 100% at 10000 attempts
-        self.cracking_progress.setValue(progress)
-        if progress == 100:
-            self.cracking_timer.stop()
-            self.cracking_active = False
-            self.append_output("WPA cracking simulation completed")
-            self.update_dashboard()
-
-    def stop_cracking(self):
-        if hasattr(self, 'cracking_active') and self.cracking_active:
-            self.cracking_active = False
-            if hasattr(self, 'cracking_timer'):
-                self.cracking_timer.stop()
-            self.cracking_progress.setValue(0)
-            self.start_cracking_btn.setEnabled(True)
-            self.stop_cracking_btn.setEnabled(False)
-            self.append_output("WPA cracking stopped")
-        else:
-            QMessageBox.warning(self, "No Active Cracking", "No WPA cracking process is currently running.")
-
-    def start_packet_capture(self):
+    def stop_mdk4_attack(self):
         try:
-            self.packet_status.setText("Packet Capture: Running")
-            # Placeholder for actual packet capture logic using Scapy
-            threading.Thread(target=self._simulate_packet_capture, daemon=True).start()
+            if hasattr(self, 'mdk4_active') and self.mdk4_active:
+                self.mdk4_active = False
+                if hasattr(self, 'mdk4_timer'):
+                    self.mdk4_timer.stop()
+                self.mdk4_progress.setValue(0)
+                self.log("Stopped MDK4 attack")
+                self.mdk4_status.setText("MDK4 Attack Status: Stopped")
+            else:
+                QMessageBox.warning(self, "Stop Failed", "No active MDK4 attack to stop.")
         except Exception as e:
-            self.packet_status.setText(f"Packet Capture: Error - {str(e)}")
-            self.log(f"Error starting packet capture: {str(e)}")
-
-    def _simulate_packet_capture(self):
-        import time
-        for i in range(5):
-            time.sleep(2)
-            self.log(f"Capturing packets... {i+1}/5")
-        self.packet_status.setText("Packet Capture: Completed")
-        self.update_packet_list()
-
-    def update_packet_list(self):
-        try:
-            self.packet_list.clear()
-            # Simulated packet data
-            packets = [
-                {"id": 1, "src": "192.168.1.100", "dst": "192.168.1.1", "protocol": "TCP", "info": "HTTP Request"},
-                {"id": 2, "src": "192.168.1.1", "dst": "192.168.1.100", "protocol": "TCP", "info": "HTTP Response"},
-                {"id": 3, "src": "192.168.1.101", "dst": "192.168.1.1", "protocol": "UDP", "info": "DNS Query"},
-                {"id": 4, "src": "192.168.1.1", "dst": "192.168.1.101", "protocol": "UDP", "info": "DNS Response"}
-            ]
-            for pkt in packets:
-                item = QListWidgetItem(f"ID: {pkt['id']} | Src: {pkt['src']} | Dst: {pkt['dst']} | Protocol: {pkt['protocol']} | Info: {pkt['info']}")
-                self.packet_list.addItem(item)
-            self.log("Packet list updated with simulated data.")
-        except Exception as e:
-            self.log(f"Error updating packet list: {str(e)}")
-
-    def load_pcap_file(self):
-        try:
-            file_name, _ = QFileDialog.getOpenFileName(self, "Open PCAP File", "", "PCAP Files (*.pcap *.pcapng);;All Files (*)")
-            if file_name:
-                self.log(f"Loading PCAP file: {file_name}")
-                # Placeholder for actual PCAP loading logic
-                self.packet_status.setText(f"Packet Capture: Loaded {file_name}")
-                self.update_packet_list()
-        except Exception as e:
-            self.log(f"Error loading PCAP file: {str(e)}")
-
-    def start_protocol_analysis(self):
-        try:
-            self.protocol_status.setText("Protocol Analysis: Running")
-            # Placeholder for actual protocol analysis logic using Scapy
-            threading.Thread(target=self._simulate_protocol_analysis, daemon=True).start()
-        except Exception as e:
-            self.protocol_status.setText(f"Protocol Analysis: Error - {str(e)}")
-            self.log(f"Error starting protocol analysis: {str(e)}")
-
-    def _simulate_protocol_analysis(self):
-        import time
-        for i in range(5):
-            time.sleep(2)
-            self.log(f"Analyzing protocols... {i+1}/5")
-        self.protocol_status.setText("Protocol Analysis: Completed")
-        self.update_protocol_alerts()
-
-    def update_protocol_alerts(self):
-        try:
-            self.protocol_alerts.clear()
-            # Simulated protocol alerts
-            alerts = [
-                {"protocol": "ARP", "issue": "Potential ARP Spoofing Detected", "details": "Multiple ARP responses from different MACs for same IP"},
-                {"protocol": "DNS", "issue": "Suspicious DNS Activity", "details": "Unusual number of DNS queries to unknown domains"},
-                {"protocol": "HTTP", "issue": "Unencrypted Traffic", "details": "HTTP traffic detected on non-standard port"}
-            ]
-            for alert in alerts:
-                item = QListWidgetItem(f"Protocol: {alert['protocol']} | Issue: {alert['issue']} | Details: {alert['details']}")
-                self.protocol_alerts.addItem(item)
-            self.log("Protocol alerts updated with simulated data.")
-        except Exception as e:
-            self.log(f"Error updating protocol alerts: {str(e)}")
-
-    def start_network_sniffing(self):
-        try:
-            self.sniff_status.setText("Sniffing Status: Running")
-            # Placeholder for actual sniffing logic using Scapy
-            threading.Thread(target=self._simulate_sniffing, daemon=True).start()
-        except Exception as e:
-            self.sniff_status.setText(f"Sniffing Status: Error - {str(e)}")
-            self.log(f"Error starting network sniffing: {str(e)}")
-
-    def _simulate_sniffing(self):
-        import time
-        for i in range(5):
-            time.sleep(2)
-            self.log(f"Sniffing... {i+1}/5")
-        self.sniff_status.setText("Sniffing Status: Completed")
-        self.update_network_map()
-
-    def update_network_map(self):
-        try:
-            self.network_map.clear()
-            # Simulated data for network map
-            devices = [
-                {"ip": "192.168.1.1", "mac": "00:50:56:C0:00:08", "os": "Unknown", "type": "Router"},
-                {"ip": "192.168.1.100", "mac": "00:0C:29:3D:4F:2A", "os": "Windows", "type": "PC"},
-                {"ip": "192.168.1.101", "mac": "00:0C:29:3D:4F:2B", "os": "Linux", "type": "Server"},
-                {"ip": "192.168.1.102", "mac": "00:0C:29:3D:4F:2C", "os": "Android", "type": "Mobile"}
-            ]
-            for device in devices:
-                item = QListWidgetItem(f"IP: {device['ip']} | MAC: {device['mac']} | OS: {device['os']} | Type: {device['type']}")
-                self.network_map.addItem(item)
-            self.log("Network map updated with simulated data.")
-        except Exception as e:
-            self.log(f"Error updating network map: {str(e)}")
+            self.log(f"Error stopping MDK4 attack: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Failed to stop attack: {str(e)}")

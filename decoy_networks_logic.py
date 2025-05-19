@@ -74,18 +74,31 @@ class DecoyNetworkManager:
         
         try:
             # Ensure interface is in monitor mode
-            subprocess.run(["airmon-ng", "start", scan_interface], check=False, capture_output=True, text=True)
+            result = subprocess.run(["airmon-ng", "start", scan_interface], check=False, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"Warning: Failed to set {scan_interface} to monitor mode: {result.stderr}")
             
             # Run airodump-ng to scan for networks
             scan_cmd = ["airodump-ng", "--write", self.scan_data_path, "--output-format", "csv", scan_interface]
             scan_process = subprocess.Popen(scan_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             time.sleep(scan_duration)
-            scan_process.terminate()
-            scan_process.wait(timeout=5)
+            try:
+                scan_process.terminate()
+                scan_process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                print("Warning: airodump-ng did not terminate in time, forcing kill.")
+                scan_process.kill()
+                scan_process.wait(timeout=5)
             
-            # Check if output file was created
-            csv_file = self.scan_data_path + "-01.csv"
-            if not os.path.exists(csv_file):
+            # Find the correct CSV file (airodump-ng appends -01, -02, etc.)
+            csv_file = None
+            for file in os.listdir(os.path.dirname(self.scan_data_path)):
+                if file.startswith(os.path.basename(self.scan_data_path).split('.')[0]) and file.endswith(".csv"):
+                    csv_file = os.path.join(os.path.dirname(self.scan_data_path), file)
+                    break
+            
+            if not csv_file or not os.path.exists(csv_file):
+                print("Warning: No scan data file found.")
                 return []
             
             # Parse CSV file for SSIDs
@@ -101,7 +114,10 @@ class DecoyNetworkManager:
             # Clean up temporary files
             for file in os.listdir(os.path.dirname(self.scan_data_path)):
                 if file.startswith(os.path.basename(self.scan_data_path).split('.')[0]):
-                    os.remove(os.path.join(os.path.dirname(self.scan_data_path), file))
+                    try:
+                        os.remove(os.path.join(os.path.dirname(self.scan_data_path), file))
+                    except Exception as e:
+                        print(f"Warning: Could not delete temporary file {file}: {str(e)}")
             
             return ssids
         except Exception as e:
@@ -125,62 +141,58 @@ class DecoyNetworkManager:
         if self.is_macos:
             print("Mock WiFi flooding on macOS...")
             self.is_wifi_flooding = True
-            self.ssid_list = custom_ssids if custom_ssids else [self.generate_random_ssid() for _ in range(num_aps)]
-            if mimic_area_ssids:
-                self.ssid_list = self.scan_area_for_ssids()  # Will return mock SSIDs on macOS
-            return {"success": True, "message": f"Mock WiFi flooding started with {len(self.ssid_list)} APs", "ssids": self.ssid_list}
+            self.ssid_list = custom_ssids or [self.generate_random_ssid() for _ in range(num_aps)]
+            return {"success": True, "message": f"Mock WiFi flooding started with {num_aps} APs", "ssids": self.ssid_list}
         
         if self.is_wifi_flooding:
             return {"success": False, "message": "WiFi flooding already active"}
         
         try:
-            # Check if hostapd is installed
-            if subprocess.run(["which", "hostapd"], capture_output=True, text=True).returncode != 0:
-                return {"success": False, "message": "hostapd not installed"}
-            
             # Generate or use provided SSIDs
             if custom_ssids:
                 self.ssid_list = custom_ssids[:num_aps]
+                while len(self.ssid_list) < num_aps:
+                    self.ssid_list.append(self.generate_random_ssid())
             elif mimic_area_ssids:
-                scanned_ssids = self.scan_area_for_ssids()
-                if scanned_ssids:
-                    self.ssid_list = random.sample(scanned_ssids, min(num_aps, len(scanned_ssids)))
+                area_ssids = self.scan_area_for_ssids()
+                if area_ssids:
+                    self.ssid_list = random.sample(area_ssids, min(len(area_ssids), num_aps))
+                    while len(self.ssid_list) < num_aps:
+                        self.ssid_list.append(self.generate_random_ssid())
                 else:
                     self.ssid_list = [self.generate_random_ssid() for _ in range(num_aps)]
             else:
                 self.ssid_list = [self.generate_random_ssid() for _ in range(num_aps)]
             
-            # Ensure interface is in monitor/managed mode as needed
-            subprocess.run(["airmon-ng", "start", self.wifi_interface], check=False, capture_output=True, text=True)
-            
-            # Create hostapd configuration for multiple SSIDs if supported, otherwise rotate
-            # For simplicity, we'll simulate one AP at a time and rotate (realistic for single interface)
+            # Create hostapd configuration for multiple fake APs
             config_lines = []
-            config_lines.append(f"interface={self.wifi_interface}")
-            config_lines.append("driver=nl80211")
-            config_lines.append(f"ssid={self.ssid_list[0]}")
-            config_lines.append(f"hw_mode=g")
-            config_lines.append(f"channel={random.randint(channel_range[0], channel_range[1])}")
-            config_lines.append("macaddr_acl=0")
-            config_lines.append("auth_algs=1")
-            config_lines.append("ignore_broadcast_ssid=0")
+            min_ch, max_ch = channel_range
+            for i, ssid in enumerate(self.ssid_list):
+                channel = min_ch + (i % (max_ch - min_ch + 1))
+                config_lines.extend([
+                    f"interface={self.wifi_interface}",
+                    "driver=nl80211",
+                    f"ssid={ssid}",
+                    f"hw_mode=g",
+                    f"channel={channel}",
+                    "wpa=0",
+                    ""
+                ])
             
             with open(self.hostapd_config_path, 'w') as f:
                 f.write("\n".join(config_lines))
             
-            # Start hostapd
-            cmd = ["hostapd", self.hostapd_config_path]
-            self.wifi_decoy_process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            # Start hostapd to broadcast fake APs
+            self.wifi_decoy_process = subprocess.Popen(["hostapd", self.hostapd_config_path],
+                                                        stdout=subprocess.PIPE,
+                                                        stderr=subprocess.PIPE,
+                                                        text=True)
             time.sleep(2)  # Give it a moment to start
-            
-            if self.wifi_decoy_process.poll() is not None:  # Process terminated
-                error_output = self.wifi_decoy_process.stderr.read() if self.wifi_decoy_process.stderr else "Unknown error"
-                self.wifi_decoy_process = None
-                return {"success": False, "message": f"hostapd failed to start: {error_output}"}
+            if self.wifi_decoy_process.poll() is not None:
+                raise RuntimeError("hostapd failed to start")
             
             self.is_wifi_flooding = True
-            # If duration is set, we would stop after the duration (handled externally in integration)
-            return {"success": True, "message": f"WiFi flooding started with {len(self.ssid_list)} APs", "ssids": self.ssid_list}
+            return {"success": True, "message": f"WiFi flooding started with {num_aps} APs", "ssids": self.ssid_list}
         except Exception as e:
             return {"success": False, "message": f"Error starting WiFi flooding: {str(e)}"}
 
@@ -202,18 +214,24 @@ class DecoyNetworkManager:
             return {"success": False, "message": "WiFi flooding not active"}
         
         try:
-            # Terminate hostapd process
             if self.wifi_decoy_process:
-                self.wifi_decoy_process.terminate()
-                self.wifi_decoy_process.wait(timeout=5)
+                try:
+                    self.wifi_decoy_process.terminate()
+                    self.wifi_decoy_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    print("Warning: hostapd did not terminate in time, forcing kill.")
+                    self.wifi_decoy_process.kill()
+                    self.wifi_decoy_process.wait(timeout=5)
             
             # Clean up configuration file
             if os.path.exists(self.hostapd_config_path):
-                os.remove(self.hostapd_config_path)
+                try:
+                    os.remove(self.hostapd_config_path)
+                except Exception as e:
+                    print(f"Warning: Could not delete hostapd config file: {str(e)}")
             
             self.is_wifi_flooding = False
             self.wifi_decoy_process = None
-            self.ssid_list = []
             return {"success": True, "message": "WiFi flooding stopped"}
         except Exception as e:
             return {"success": False, "message": f"Error stopping WiFi flooding: {str(e)}"}
@@ -233,32 +251,34 @@ class DecoyNetworkManager:
         if self.is_macos:
             print("Mock Bluetooth flooding on macOS...")
             self.is_bt_flooding = True
-            self.bt_name_list = custom_names if custom_names else [self.generate_random_bt_name() for _ in range(num_devices)]
-            return {"success": True, "message": f"Mock Bluetooth flooding started with {len(self.bt_name_list)} device names", "names": self.bt_name_list}
+            self.bt_name_list = custom_names or [self.generate_random_bt_name() for _ in range(num_devices)]
+            return {"success": True, "message": f"Mock Bluetooth flooding started with {num_devices} devices", "names": self.bt_name_list}
         
         if self.is_bt_flooding:
             return {"success": False, "message": "Bluetooth flooding already active"}
         
         try:
-            # Check if Bluetooth tools are installed
-            if subprocess.run(["which", "hciconfig"], capture_output=True, text=True).returncode != 0:
-                return {"success": False, "message": "hciconfig not installed"}
-            if subprocess.run(["which", "hcitool"], capture_output=True, text=True).returncode != 0:
-                return {"success": False, "message": "hcitool not installed"}
-            
             # Generate or use provided device names
             if custom_names:
                 self.bt_name_list = custom_names[:num_devices]
+                while len(self.bt_name_list) < num_devices:
+                    self.bt_name_list.append(self.generate_random_bt_name())
             else:
                 self.bt_name_list = [self.generate_random_bt_name() for _ in range(num_devices)]
             
             # Ensure Bluetooth interface is up
-            subprocess.run(["hciconfig", self.bt_interface, "up"], check=False, capture_output=True)
+            result = subprocess.run(["hciconfig", self.bt_interface, "up"], check=False, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"Warning: Failed to bring up Bluetooth interface: {result.stderr}")
             
             # Set the interface to be discoverable with a fake name (rotating names in real scenario)
             first_name = self.bt_name_list[0]
-            subprocess.run(["hciconfig", self.bt_interface, "name", first_name], check=False, capture_output=True)
-            subprocess.run(["hciconfig", self.bt_interface, "piscan"], check=False, capture_output=True)  # Make discoverable
+            result = subprocess.run(["hciconfig", self.bt_interface, "name", first_name], check=False, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"Warning: Failed to set Bluetooth name: {result.stderr}")
+            result = subprocess.run(["hciconfig", self.bt_interface, "piscan"], check=False, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"Warning: Failed to set Bluetooth to discoverable: {result.stderr}")
             
             self.is_bt_flooding = True
             # Note: Simulating multiple devices may require multiple interfaces or advanced scripting
@@ -286,8 +306,12 @@ class DecoyNetworkManager:
         
         try:
             # Reset Bluetooth interface to non-discoverable
-            subprocess.run(["hciconfig", self.bt_interface, "noiscan"], check=False, capture_output=True)
-            subprocess.run(["hciconfig", self.bt_interface, "name", ""], check=False, capture_output=True)  # Reset name
+            result = subprocess.run(["hciconfig", self.bt_interface, "noiscan"], check=False, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"Warning: Failed to set Bluetooth to non-discoverable: {result.stderr}")
+            result = subprocess.run(["hciconfig", self.bt_interface, "name", ""], check=False, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"Warning: Failed to reset Bluetooth name: {result.stderr}")
             
             self.is_bt_flooding = False
             self.bt_decoy_process = None
