@@ -24,7 +24,7 @@ WiFi Marauder is built to assist in testing WiFi network security by providing t
 
 WiFi Marauder is developed using Python with the following key components:
 
-- **GUI Framework**: PyQt5 for a cross-platform user interface.
+- **GUI Framework**: PySide6 with optional `qdarktheme` for modern dark/light theming.
 - **Backend Logic**: Modular Python scripts for each feature, ensuring separation of concerns and ease of maintenance.
 - **Environment Compatibility**: Special considerations for macOS with mock functionality where native tools (like `airmon-ng`) are not supported.
 
@@ -33,7 +33,7 @@ WiFi Marauder is developed using Python with the following key components:
 The application follows a clear data flow from user interaction to backend processing and back to the UI for feedback:
 ```mermaid
 flowchart TD
-    User -->|Interacts with| GUI[GUI (PyQt5)]
+    User -->|Interacts with| GUI[GUI (PySide6)]
     GUI -->|Sends commands to| Middleware[Middleware (Manager Classes)]
     Middleware -->|Processes and delegates to| Backend[Backend Logic (Feature Modules)]
     Backend -->|Returns results to| Middleware
@@ -67,11 +67,15 @@ flowchart TD
    ```bash
    pip install -r requirements.txt
    ```
-4. **Run the Application**:
+4. **Optional for nicer dark theme**:
+   ```bash
+   pip install qdarktheme
+   ```
+5. **Run the Application**:
    ```bash
    python main.py
    ```
-**Note**: Some features require specific tools like `airmon-ng` and `hostapd` which are not fully supported on macOS. Mock functionality is provided for testing on such platforms.
+**Note**: Some features require specific tools like `airmon-ng` and `hostapd` which are not fully supported on macOS. Mock functionality is provided for testing on such platforms. For the best visual experience install `qdarktheme`.
 
 ## Usage
 

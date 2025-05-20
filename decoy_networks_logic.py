@@ -11,6 +11,8 @@ import time
 import csv
 import re
 import sys
+from pathlib import Path
+import tempfile
 
 class DecoyNetworkManager:
     """
@@ -26,13 +28,16 @@ class DecoyNetworkManager:
         self.is_bt_flooding = False
         self.ssid_list = []
         self.bt_name_list = []
-        self.hostapd_config_path = "/tmp/hostapd_decoy.conf"
-        self.scan_data_path = "/tmp/wifi_scan.csv"
+        tmp_dir = Path(tempfile.gettempdir())
+        self.hostapd_config_path = str(tmp_dir / "hostapd_decoy.conf")
+        # airodump appends suffixes automatically, store base path without extension
+        self.scan_data_path = str(tmp_dir / "wifi_scan")
         self.is_macos = sys.platform == "darwin"
         if self.is_macos:
             print("Warning: Running on macOS. WiFi manipulation tools like airmon-ng are not fully supported. Using mock functionality for testing.")
 
-    def generate_random_ssid(self):
+    @staticmethod
+    def generate_random_ssid():
         """
         Generate a random SSID for a fake access point.
         
@@ -43,7 +48,8 @@ class DecoyNetworkManager:
         suffix = ''.join(random.choices(string.digits, k=4))
         return f"{random.choice(prefixes)}_{suffix}"
 
-    def generate_random_bt_name(self):
+    @staticmethod
+    def generate_random_bt_name():
         """
         Generate a random Bluetooth device name.
         

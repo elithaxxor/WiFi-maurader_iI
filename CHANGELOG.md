@@ -39,6 +39,11 @@
   - Integrated logic to simulate sniffing and update network map with placeholder data.
   - Updated `README.md` to include this new feature under the Features section.
 
+- **2025-05-20 00:02:00-04:00**: Added global dark/light theme toggle using `qdarktheme`.
+   - Added optional dependency `qdarktheme` and palette fallback in `main.py`.
+   - Introduced `View` menu with "Toggle Dark/Light Theme" action.
+   - Theme applies at runtime and on startup with dark default.
+
 ### Completed
 
 - Full integration of Anonymity Tools features (Tor Network, DNS Leak Protection, IP Address Rotation, User-Agent Spoofing, Temporal Disguise, VPN Integration).

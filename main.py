@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 from math import cos, sin, pi, log10
 from collections import Counter
+from pathlib import Path
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTabWidget, QVBoxLayout, QPushButton,
@@ -17,9 +18,13 @@ from PySide6.QtWidgets import (
     QGridLayout, QSplitter, QSpinBox, QCheckBox, QListWidget, QProgressBar
 )
 from PySide6.QtCore import QDate, QTimer, Qt
-from PySide6.QtGui import QIcon, QPixmap
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.figure import Figure
+from PySide6.QtGui import QIcon, QPixmap, QAction
+
+# Optional dark theme
+try:
+    import qdarktheme
+except ImportError:
+    qdarktheme = None
 
 # New imports for integrated features
 try:
@@ -41,10 +46,10 @@ except ImportError:
     AttackSequenceManager = None
 
 try:
-    from network_filter_manager import NetworkFilterManager
+    from network_filter_manager import NetworkFilterManager as NFM
 except ImportError:
     print("Warning: NetworkFilterManager not available. Functionality will be limited.")
-    NetworkFilterManager = None
+    NFM = None
 
 try:
     from wps_vulnerability_tester import WPSVulnerabilityTester
@@ -203,16 +208,14 @@ class WiFiMarauderApp(QMainWindow):
         self.setWindowTitle("WiFi Marauder v2.0")
         self.setGeometry(100, 100, 1200, 800)
         
-        # Load application icon
-        icon = QIcon("wifi_marauder.png")
-        if icon.isNull():
-            print("Warning: Could not load icon 'wifi_marauder.png'. Make sure it exists in the application directory.")
-        else:
-            self.setWindowIcon(icon)
+        # Load application icon safely using pathlib
+        icon_path = Path(__file__).with_name("wifi_marauder.png")
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
 
         # Initialize managers if available
         self.attack_sequence_manager = AttackSequenceManager(self) if AttackSequenceManager else None
-        self.network_filter_manager = NetworkFilterManager() if NetworkFilterManager else None
+        self.network_filter_manager = NFM() if NFM else None
         self.decoy_manager = DecoyNetworkManager() if DecoyNetworkManager else None
         self.anonymity_manager = AnonymityToolsManager() if AnonymityToolsManager else None
         self.wps_tester = WPSVulnerabilityTester() if WPSVulnerabilityTester else None
@@ -225,7 +228,11 @@ class WiFiMarauderApp(QMainWindow):
         
         # Detect interfaces on startup
         self.detect_interfaces()
-        
+
+        # Theme flag
+        self.is_dark_theme = True
+        self.apply_theme()
+
     def setup_ui(self):
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -246,6 +253,15 @@ class WiFiMarauderApp(QMainWindow):
         tabs.addTab(self.create_wps_tab(), "WPS Testing")
         tabs.addTab(self.create_logs_tab(), "Logs && Analysis")
         
+        # ---------------------------
+        # Menu bar for View options
+        # ---------------------------
+        menubar = self.menuBar()
+        view_menu = menubar.addMenu("View")
+        self.toggle_theme_action = QAction("Toggle Dark/Light Theme", self)
+        self.toggle_theme_action.triggered.connect(self.toggle_theme)
+        view_menu.addAction(self.toggle_theme_action)
+
     def create_dashboard_tab(self):
         dashboard_tab = QWidget()
         layout = QVBoxLayout(dashboard_tab)
@@ -776,3 +792,64 @@ class WiFiMarauderApp(QMainWindow):
         except Exception as e:
             self.log(f"Error stopping MDK4 attack: {str(e)}")
             QMessageBox.warning(self, "Error", f"Failed to stop attack: {str(e)}")
+
+    # --------------------------------------------------
+    # Graceful shutdown: stop timers & background processes
+    # --------------------------------------------------
+    def closeEvent(self, event):
+        """Ensure timers and subprocesses are stopped before the app exits."""
+        try:
+            # Stop MDK4 timer
+            if hasattr(self, 'mdk4_timer') and self.mdk4_timer is not None:
+                self.mdk4_timer.stop()
+        except Exception as e:
+            print(f"Warning during timer shutdown: {e}")
+
+        # Stop attack sequence manager
+        try:
+            if hasattr(self, 'attack_sequence_manager') and self.attack_sequence_manager:
+                if hasattr(self.attack_sequence_manager, 'stop'):
+                    self.attack_sequence_manager.stop()
+        except Exception as e:
+            print(f"Warning stopping attack sequence manager: {e}")
+
+        # Stop decoy activities
+        try:
+            if hasattr(self, 'decoy_manager') and self.decoy_manager:
+                if getattr(self.decoy_manager, 'is_wifi_flooding', False):
+                    self.decoy_manager.stop_wifi_flood()
+                if getattr(self.decoy_manager, 'is_bt_flooding', False):
+                    self.decoy_manager.stop_bluetooth_flood()
+        except Exception as e:
+            print(f"Warning stopping decoys: {e}")
+
+        # Close database connection if open
+        try:
+            if hasattr(self, 'db') and self.db:
+                self.db.close()
+        except Exception as e:
+            print(f"Warning closing database: {e}")
+
+        super().closeEvent(event)
+
+    # ---------------------------
+    # Theming helpers
+    # ---------------------------
+    def apply_theme(self):
+        """Apply dark or light theme using qdarktheme if available, else fallback."""
+        if qdarktheme is not None:
+            qdarktheme.setup_theme("dark" if self.is_dark_theme else "light")
+        else:
+            # Minimal fallback: change base palette
+            palette = self.palette()
+            if self.is_dark_theme:
+                palette.setColor(palette.Window, Qt.black)
+                palette.setColor(palette.WindowText, Qt.white)
+            else:
+                palette = QApplication.style().standardPalette()
+            QApplication.setPalette(palette)
+
+    def toggle_theme(self):
+        """Switch between dark and light themes."""
+        self.is_dark_theme = not self.is_dark_theme
+        self.apply_theme()
