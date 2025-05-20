@@ -24,6 +24,12 @@ except ImportError as exc:  # pragma: no cover
     print(json.dumps({"success": False, "error": f"Failed to import core modules: {exc}"}))
     sys.exit(1)
 
+try:
+    from osint_integrations import ShodanClient, WigleClient
+except ImportError as exc:  # pragma: no cover
+    print(json.dumps({"success": False, "error": f"Failed to import OSINT modules: {exc}"}))
+    sys.exit(1)
+
 
 def as_json(data):
     """Print *data* as prettified JSON and exit."""
@@ -110,6 +116,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     # Status
     sub.add_parser("status", help="Show decoy flood status").set_defaults(func=cmd_status)
+
+    # OSINT – Shodan search
+    shodan = sub.add_parser("shodan-search", help="Search Shodan hosts")
+    shodan.add_argument("query", help="Search query string")
+    shodan.set_defaults(func=lambda args: as_json({
+        "success": True,
+        "results": ShodanClient().search_hosts(args.query, limit=100),
+    }))
+
+    # OSINT – Wigle search
+    wigle = sub.add_parser("wigle-search", help="Search Wigle by SSID")
+    wigle.add_argument("ssid", help="SSID string")
+    wigle.set_defaults(func=lambda args: as_json({
+        "success": True,
+        "results": WigleClient().search_networks(args.ssid, results_per_page=100),
+    }))
 
     return p
 

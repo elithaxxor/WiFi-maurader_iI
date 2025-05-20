@@ -80,4 +80,4 @@ Next Steps
 	•	Emails
 	•	Subdomains
 	•	Linked services
-	•	Phishing Portal Logs → Lookup victims or domains for additional contextsd
+	•	Phishing Portal Logs → Lookup victims or domains for additional context

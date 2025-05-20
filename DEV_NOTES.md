@@ -59,4 +59,22 @@ WiFi Marauder currently provides:
 
 ---
 
+Integrating shodan / wiggle for OSNT evaluation . 
+
+🕷️ SpiderFoot / Hunter.io Integration Plan
+
+🔍 Purpose:
+	•	Email/Domain Discovery from SSIDs, captive portals, or user input
+	•	Subdomain Enumeration, DNS records, breach exposure
+	•	Phishing Portal Intelligence: Link domains to known email leaks or targets
+
+🧠 Used In:
+	•	OSINT Graph Tab → Automatically expand:
+	•	Emails
+	•	Subdomains
+	•	Linked services
+	•	Phishing Portal Logs → Lookup victims or domains for additional context
+
+
+
 *End of notes.*

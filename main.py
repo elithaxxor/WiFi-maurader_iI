@@ -57,6 +57,12 @@ except ImportError:
     print("Warning: WPSVulnerabilityTester not available. Functionality will be limited.")
     WPSVulnerabilityTester = None
 
+try:
+    from osint_tab import OSINTTab
+except ImportError:
+    print("Warning: OSINTTab not available. Functionality will be limited.")
+    OSINTTab = None
+
 class DatabaseManager:
     """
     Encapsulates SQLite database operations for the WiFi Marauder app.
@@ -252,6 +258,8 @@ class WiFiMarauderApp(QMainWindow):
         tabs.addTab(self.create_filters_tab(), "Network Filters")
         tabs.addTab(self.create_wps_tab(), "WPS Testing")
         tabs.addTab(self.create_logs_tab(), "Logs && Analysis")
+        # OSINT lookups tab
+        tabs.addTab(OSINTTab(), "OSINT Lookup")
         
         # ---------------------------
         # Menu bar for View options
